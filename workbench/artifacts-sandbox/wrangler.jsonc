@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "artifactfs-sandbox",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+  },
+  "vars": {
+    "ARTIFACTFS_BACKING_GIT_BRANCH": "main",
+    "ARTIFACTFS_SANDBOX_ID": "artifactfs-sandbox",
+  },
+  "containers": [
+    {
+      "class_name": "ArtifactsSandbox",
+      "image": "./Dockerfile",
+      "image_build_context": ".",
+      "instance_type": "basic",
+      "max_instances": 1,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "ArtifactsSandbox",
+        "name": "ARTIFACTS_SANDBOX",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["ArtifactsSandbox"],
+      "tag": "v1",
+    },
+  ],
+}
