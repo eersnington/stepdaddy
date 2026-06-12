@@ -2,8 +2,9 @@ import { StepdaddyError } from "../core/errors.js";
 import type { CallStore, CallStoreRun, CommitResult } from "../core/types.js";
 
 /**
- * HTTP call-history store shared by remote HTTP-backed adapters. The service
- * owns the Git repos and implements this protocol:
+ * Options for the remote HTTP adapter.
+ *
+ * The service owns the Git repos and implements this protocol:
  *
  *   POST /runs/open                multipart metadata + raw file parts      -> { repo, branch, head? }
  *   GET  /runs/:repo/head                                                  -> { head? }
@@ -16,8 +17,17 @@ import type { CallStore, CallStoreRun, CommitResult } from "../core/types.js";
  * very large commits.
  */
 export type RemoteHttpStoreOptions = {
+  /** Base URL for the remote call-history service. */
   readonly url: string;
+  /** Optional bearer token sent as `Authorization: Bearer <token>`. */
   readonly token?: string;
+  /**
+   * Custom `fetch` implementation.
+   *
+   * Use this for tests or runtimes that need a wrapped fetch.
+   *
+   * @default globalThis.fetch
+   */
   readonly fetch?: typeof fetch;
 };
 
@@ -40,6 +50,7 @@ type CommitFilesMetadata = {
   readonly files: readonly MultipartFileEntry[];
 };
 
+/** @internal Creates the low-level call store used by `remote()`. */
 export function remoteHttpStore(options: RemoteHttpStoreOptions): CallStore {
   const baseUrl = options.url.replace(/\/+$/, "");
   const fetchRemote = options.fetch ?? fetch;

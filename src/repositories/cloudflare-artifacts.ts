@@ -6,8 +6,11 @@ import { MemoryFS } from "./isomorphic-git-memory-fs.js";
  * Structural types for the Cloudflare Artifacts Workers binding
  * (`env.ARTIFACTS`). Structural so this package never imports generated
  * Worker types; any object with this surface works, including test fakes.
+ *
+ * Pass this binding to `cloudflare(env.ARTIFACTS)` in a Worker or Workflow.
  */
 export type ArtifactsBindingLike = {
+  /** Creates a new Artifact repository for one Workflow run. */
   create(
     name: string,
     opts?: {
@@ -16,32 +19,55 @@ export type ArtifactsBindingLike = {
       readonly setDefaultBranch?: string;
     },
   ): Promise<ArtifactsCreatedRepoLike>;
+  /** Opens an existing Artifact repository by name. */
   get(name: string): Promise<ArtifactsRepositoryLike>;
 };
 
+/** Repository handle returned after creating a Cloudflare Artifact repository. */
 export type ArtifactsCreatedRepoLike = {
+  /** Repository name assigned by the Artifacts binding. */
   readonly name: string;
+  /** Git remote URL used by Stepdaddy to push call-history commits. */
   readonly remote: string;
+  /** Default Git branch when the binding reports one. */
   readonly defaultBranch?: string;
   /** Initial write token; format `art_v1_<secret>?expires=<unix_seconds>`. */
   readonly token: string;
 };
 
+/** Repository handle returned when opening an existing Cloudflare Artifact repository. */
 export type ArtifactsRepositoryLike = {
+  /** Repository name when the binding exposes one. */
   readonly name?: string;
+  /** Git remote URL when the binding exposes one. */
   readonly remote?: string;
+  /** Creates a short-lived Git token for pushing call-history commits. */
   createToken(scope?: "read" | "write", ttl?: number): Promise<{ readonly plaintext: string }>;
 };
 
+/**
+ * Options for the Cloudflare Artifacts adapter.
+ *
+ * Most Workers can use the defaults. `remoteFor` is only needed when the
+ * Artifacts binding can open repos but does not expose their Git remote URL.
+ */
 export type CloudflareRepositoryStoreOptions = {
   /**
    * Resolve the git remote URL for an existing repo when the binding handle
    * does not expose one. Required only if `get()` results lack `remote`.
    */
   readonly remoteFor?: (repoName: string) => string;
-  /** Write-token TTL in seconds. Defaults to 900. */
+  /**
+   * Write-token TTL in seconds.
+   *
+   * @default 900
+   */
   readonly tokenTtlSeconds?: number;
-  /** Commit author. Defaults to stepdaddy. */
+  /**
+   * Commit author used for call-history commits.
+   *
+   * @default { name: "stepdaddy", email: "stepdaddy@workflow.invalid" }
+   */
   readonly author?: { readonly name: string; readonly email: string };
   /** @internal Test seam; defaults to the isomorphic-git engine. */
   readonly gitWorkspaceFactory?: GitWorkspaceFactory;
@@ -63,6 +89,7 @@ export type GitWorkspaceFactory = {
   }): Promise<PushableGitWorkspace>;
 };
 
+/** @internal Git workspace used by the Cloudflare Artifacts adapter. */
 export type PushableGitWorkspace = {
   readHead(): Promise<string | undefined>;
   readFile(path: string): Promise<Uint8Array | null>;
@@ -74,6 +101,7 @@ const DEFAULT_AUTHOR = {
   email: "stepdaddy@workflow.invalid",
 };
 
+/** @internal Creates the low-level call store used by `cloudflare()`. */
 export function cloudflareCallStore(
   binding: ArtifactsBindingLike,
   options?: CloudflareRepositoryStoreOptions,

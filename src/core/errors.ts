@@ -1,3 +1,9 @@
+/**
+ * Machine-readable error codes raised by Stepdaddy.
+ *
+ * Use these codes when deciding whether a Workflow should retry, stop, or ask an
+ * operator to reconcile provider state.
+ */
 export type StepdaddyErrorCode =
   | "INVALID_EXTERNAL_CALL"
   | "SIDE_EFFECT_CONFLICT"
@@ -13,10 +19,30 @@ const RETRYABLE: Record<StepdaddyErrorCode, boolean> = {
   SIDE_EFFECT_RECONCILE_FAILED: true,
 };
 
-/** Tagged error for failures raised by Stepdaddy itself. */
+/**
+ * Tagged error for failures raised by Stepdaddy itself.
+ *
+ * Provider errors thrown from your `execute()` function are rethrown unchanged.
+ * `StepdaddyError` is reserved for invalid call definitions, unsafe retries,
+ * reconciliation failures, and call-history storage failures.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await stepdaddy.call(createPaymentIntent, context);
+ * } catch (error) {
+ *   if (error instanceof StepdaddyError && error.code === "SIDE_EFFECT_AMBIGUOUS") {
+ *     // Stop retrying and reconcile provider state manually.
+ *   }
+ * }
+ * ```
+ */
 export class StepdaddyError extends Error {
+  /** Stable code for programmatic handling. */
   readonly code: StepdaddyErrorCode;
+  /** Whether retrying the same Workflow step may make progress. */
   readonly retryable: boolean;
+  /** Original lower-level error when one exists. */
   override readonly cause?: unknown;
 
   constructor(

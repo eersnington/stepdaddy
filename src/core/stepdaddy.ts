@@ -27,10 +27,45 @@ const BRANCH = "main";
 const RUN_JSON_PATH = ".stepd/run.json";
 const NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,99}$/;
 
+/**
+ * Options for `createStepdaddy()`.
+ *
+ * @example
+ * ```ts
+ * const stepdaddy = createStepdaddy({
+ *   adapter: cloudflare(env.ARTIFACTS),
+ * });
+ * ```
+ */
 export type CreateStepdaddyOptions = {
+  /** Storage adapter used to open and commit call-history records. */
   readonly adapter: StepdaddyAdapter;
 };
 
+/**
+ * Defines one external provider call that can be safely tracked across Workflow retries.
+ *
+ * The definition names the provider operation, chooses the recovery behavior, and
+ * contains the function that actually calls the provider. Pass the returned value
+ * to `stepdaddy.call()` inside a `step.do()` callback.
+ *
+ * @example
+ * ```ts
+ * const createPaymentIntent = defineExternalCall<ChargeInput, PaymentIntent>({
+ *   name: "stripe.payment_intent.create",
+ *   recovery: "idempotent-call",
+ *   execute: async ({ request, key }) => {
+ *     const response = await fetch("https://api.stripe.com/v1/payment_intents", {
+ *       method: "POST",
+ *       headers: { "idempotency-key": key },
+ *       body: new URLSearchParams({ amount: String(request.amount) }),
+ *     });
+ *
+ *     return (await response.json()) as PaymentIntent;
+ *   },
+ * });
+ * ```
+ */
 export function defineExternalCall<Request, Result>(
   spec: ExternalCallSpec<Request, Result>,
 ): ExternalCall<Request, Result> {
@@ -38,6 +73,27 @@ export function defineExternalCall<Request, Result>(
   return spec;
 }
 
+/**
+ * Creates the Stepdaddy client used inside a Workflow run.
+ *
+ * The client is intentionally small: call `stepdaddy.call()` from a Cloudflare
+ * `step.do()` callback to record the external side-effect boundary and either
+ * run, reconcile, or reuse the provider result.
+ *
+ * @example
+ * ```ts
+ * const stepdaddy = createStepdaddy({ adapter: cloudflare(env.ARTIFACTS) });
+ *
+ * await step.do("charge customer", async (ctx) => {
+ *   return await stepdaddy.call(createPaymentIntent, {
+ *     workflow: event,
+ *     step: ctx,
+ *     key: `wf:${event.instanceId}:charge-customer`,
+ *     request: { amount: 1200, currency: "usd" },
+ *   });
+ * });
+ * ```
+ */
 export function createStepdaddy(options: CreateStepdaddyOptions): Stepdaddy {
   const store = (options.adapter as InternalStepdaddyAdapter).store;
 

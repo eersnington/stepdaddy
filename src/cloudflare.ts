@@ -11,6 +11,15 @@ import type { CloudflareAdapter, InternalStepdaddyAdapter } from "./core/types.j
  * Artifacts stores compact call-history JSON records. The binding manages
  * repositories and tokens, while this adapter uses a Worker-compatible Git path
  * for commits.
+ *
+ * @example
+ * ```ts
+ * import { cloudflare } from "stepdaddy/cloudflare";
+ *
+ * const stepdaddy = createStepdaddy({
+ *   adapter: cloudflare(env.ARTIFACTS),
+ * });
+ * ```
  */
 export function cloudflare(
   binding: ArtifactsBindingLike,

@@ -8,6 +8,13 @@ import type { InternalStepdaddyAdapter, MemoryAdapter } from "./core/types.js";
  * `memory()` keeps committed call-history repos only for the lifetime of this
  * JavaScript process. It does not persist to disk; use `local()` when you need
  * to inspect records after restart.
+ *
+ * @example
+ * ```ts
+ * import { memory } from "stepdaddy/memory";
+ *
+ * const stepdaddy = createStepdaddy({ adapter: memory() });
+ * ```
  */
 export function memory(): MemoryAdapter {
   return {

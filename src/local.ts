@@ -4,7 +4,11 @@ import type { InternalStepdaddyAdapter, LocalAdapter } from "./core/types.js";
 export type LocalOptions = {
   /** Directory that holds one persistent call-history Git repo per Workflow run. */
   readonly root: string;
-  /** Commit author. Defaults to stepdaddy. */
+  /**
+   * Commit author used for local call-history commits.
+   *
+   * @default { name: "stepdaddy", email: "stepdaddy@workflow.invalid" }
+   */
   readonly author?: { readonly name: string; readonly email: string };
 };
 
@@ -15,6 +19,15 @@ export type LocalOptions = {
  * survive process restarts and be inspectable with normal Git tooling. This is
  * Node-only and uses native local filesystem/Git behavior underneath; use
  * `memory()` for pure ephemeral unit tests.
+ *
+ * @example
+ * ```ts
+ * import { local } from "stepdaddy/local";
+ *
+ * const stepdaddy = createStepdaddy({
+ *   adapter: local({ root: ".stepdaddy" }),
+ * });
+ * ```
  */
 export function local(options: LocalOptions): LocalAdapter {
   return {

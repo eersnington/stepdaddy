@@ -9,6 +9,15 @@ export type RemoteOptions = RemoteHttpStoreOptions;
  *
  * The remote protocol sends multipart JSON record uploads with metadata and is
  * intended for compact side-effect records, not streaming blob uploads.
+ *
+ * @example
+ * ```ts
+ * import { remote } from "stepdaddy/remote";
+ *
+ * const stepdaddy = createStepdaddy({
+ *   adapter: remote({ url: env.STEPDADDY_REMOTE_URL, token: env.STEPDADDY_TOKEN }),
+ * });
+ * ```
  */
 export function remote(options: RemoteOptions): RemoteAdapter {
   return {
