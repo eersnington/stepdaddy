@@ -1,7 +1,7 @@
 {
   "name": "stepdaddy",
   "version": "0.1.0",
-  "description": "A starter for creating a TypeScript package.",
+  "description": "Git-backed idempotency records for external calls inside Cloudflare Workflows.",
   "homepage": "https://github.com/eersnington/stepdaddy#readme",
   "bugs": {
     "url": "https://github.com/eersnington/stepdaddy/issues"
