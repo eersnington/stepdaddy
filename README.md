@@ -65,6 +65,55 @@ await step.do("charge customer", async (ctx) => {
 });
 ```
 
+Stepdaddy records each side-effect boundary as Git history. For example, if a Workflow creates a Stripe payment intent, crashes after Stripe accepts it, and then retries with the same idempotency key, the run history shows exactly what happened:
+
+```text
+* <sha>  (HEAD -> main) stepdaddy: stripe.invoice.create attempt 1 committed
+| Workflow: charge-customer-workflow
+| Instance: <workflow-instance-id>
+| Step: create invoice #1
+| External-Id: in_123
+| Status: open
+| Record: committed.json
+|
+* <sha>  stepdaddy: stripe.invoice.create attempt 1 started
+| Workflow: charge-customer-workflow
+| Instance: <workflow-instance-id>
+| Step: create invoice #1
+| Record: attempts/001-started.json
+|
+* <sha>  stepdaddy: init workflow run
+| Workflow: charge-customer-workflow
+| Instance: <workflow-instance-id>
+| Record: .stepd/run.json
+|
+* <sha>  stepdaddy: stripe.payment_intent.create attempt 2 committed
+| Workflow: charge-customer-workflow
+| Instance: <workflow-instance-id>
+| Step: charge customer #1
+| External-Id: pi_123
+| Status: succeeded idempotency-replay
+| Record: committed.json
+|
+* <sha>  stepdaddy: stripe.payment_intent.create attempt 2 started
+| Workflow: charge-customer-workflow
+| Instance: <workflow-instance-id>
+| Step: charge customer #1
+| Record: attempts/002-started.json
+|
+* <sha>  stepdaddy: stripe.payment_intent.create attempt 1 error
+| Workflow: charge-customer-workflow
+| Instance: <workflow-instance-id>
+| Step: charge customer #1
+| Record: attempts/001-error.json
+|
+* <sha>  stepdaddy: stripe.payment_intent.create attempt 1 started
+| Workflow: charge-customer-workflow
+| Instance: <workflow-instance-id>
+| Step: charge customer #1
+| Record: attempts/001-started.json
+```
+
 `stepdaddy.call(...)` returns the provider result directly.
 
 ## Mental Model
