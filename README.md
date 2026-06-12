@@ -1,23 +1,175 @@
-# vite-plus-starter
+# stepdaddy
 
-A starter for creating a Vite Plus project.
+![Status](https://img.shields.io/badge/status-early%20development-f59e0b?style=flat-square)
 
-## Development
+> ⚠️ Warning: I do not recommend to use this package within production as this is more of an experiment that I took to pair soon to be released Cloudflare Artifacts, and Cloudflare Workflows. It works as per the confines of my limited tests, but there are (and should be) better ways to do idempotent retires within CF Workflows.
 
-- Install dependencies:
+Git-backed idempotency records for external side effects inside Cloudflare Workflows.
 
-```bash
-vp install
+Workflows already retries failed `step.do()` callbacks and caches successful step output. Stepdaddy adds what is missing for one external provider call inside a retryable step:
+
+- reuse the committed provider result on retry
+- reject a changed request for the same key
+- stop for reconciliation when the outcome is unknown
+
+Note: Stepdaddy does not provide exactly-once execution. Provider safety still depends on provider idempotency keys, reconciliation, or failing closed.
+
+## Install
+
+```sh
+bun add stepdaddy
+pnpm add stepdaddy
 ```
 
-- Run the unit tests:
+## Quick Start
 
-```bash
-vp test
+```ts
+import { createStepdaddy, defineExternalCall } from "stepdaddy";
+import { cloudflare } from "stepdaddy/cloudflare";
+
+const stepdaddy = createStepdaddy({ adapter: cloudflare(env.ARTIFACTS_BINDING) });
+
+const createPaymentIntent = defineExternalCall<ChargeInput, PaymentIntent>({
+  name: "stripe.payment_intent.create",
+  recovery: "idempotent-call",
+  execute: async ({ request, key }) => {
+    const response = await fetch("https://api.stripe.com/v1/payment_intents", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.STRIPE_SECRET}`,
+        "content-type": "application/x-www-form-urlencoded",
+        "idempotency-key": key,
+      },
+      body: new URLSearchParams({
+        customer: request.customerId,
+        amount: String(request.amount),
+        currency: request.currency,
+      }),
+    });
+
+    if (!response.ok) throw new Error(`Stripe failed with HTTP ${response.status}`);
+    const body = (await response.json()) as PaymentIntent;
+    return { id: body.id, status: body.status };
+  },
+});
+
+await step.do("charge customer", async (ctx) => {
+  const intent = await stepdaddy.call(createPaymentIntent, {
+    workflow: event,
+    step: ctx,
+    key: `wf:${event.instanceId}:charge-customer`,
+    request: { customerId, amount, currency },
+  });
+
+  return { paymentIntentId: intent.id };
+});
 ```
 
-- Build the library:
+`stepdaddy.call(...)` returns the provider result directly.
 
-```bash
-vp pack
+## Mental Model
+
+1. `key` identifies exactly one external side effect and must be stable across retries. Never include attempt numbers, timestamps, or randomness.
+2. `request` and `result` must be JSON-serializable. The request digest uses `JSON.stringify`, so build request objects deterministically.
+3. Return expected provider outcomes as values so they are stored and reused. Throw only for infrastructure or unexpected failures.
+4. Redact secrets. Stepdaddy stores exactly what `execute` and `summary` return.
+
+## Retry Behavior
+
+What happens when a step retries `stepdaddy.call(...)` with the same key:
+
+| State from the previous attempt            | Behavior                                              |
+| ------------------------------------------ | ----------------------------------------------------- |
+| Result committed, same request digest      | Returns the stored result; `execute` does not run     |
+| Result committed, different request digest | Throws `SIDE_EFFECT_CONFLICT`; `execute` does not run |
+| Attempt started, no result recorded        | Follows the `recovery` policy                         |
+| No record                                  | Runs `execute` normally                               |
+
+Other failure cases:
+
+- Storage fails before the started record is persisted: Stepdaddy throws and `execute` does not run.
+- `execute` succeeds but the result cannot be persisted: Stepdaddy throws `SIDE_EFFECT_STORAGE_FAILED`; the next retry follows the recovery policy.
+- `execute` throws: Stepdaddy records the attempt error when possible and rethrows the original error, leaving Workflows retry config in charge.
+
+## API
+
+### `createStepdaddy(options): Stepdaddy`
+
+| Option    | Type               | Description                                 |
+| --------- | ------------------ | ------------------------------------------- |
+| `adapter` | `StepdaddyAdapter` | Storage adapter. See [Adapters](#adapters). |
+
+### `defineExternalCall<Request, Result>(spec): ExternalCall<Request, Result>`
+
+| Field      | Type                               | Required | Description                                                                                   |
+| ---------- | ---------------------------------- | -------- | --------------------------------------------------------------------------------------------- |
+| `name`     | `string`                           | yes      | Stable identifier for the provider operation, e.g. `"stripe.payment_intent.create"`.          |
+| `recovery` | `ExternalCallRecovery`             | yes      | What to do when a previous attempt started but recorded no result. See [Recovery](#recovery). |
+| `execute`  | `(ctx) => Promise<Result>`         | yes      | Performs the provider call. Receives `{ request, key, workflow, step, attempt }`.             |
+| `request`  | Standard Schema                    | no       | Validates the request before any record is written.                                           |
+| `result`   | Standard Schema                    | no       | Validates the result before it is stored.                                                     |
+| `summary`  | `(ctx) => Record<string, unknown>` | no       | Compact audit fields stored with the result. Receives the execute context plus `result`.      |
+
+### `stepdaddy.call(externalCall, context): Promise<Result>`
+
+| Field      | Type                       | Description                                                   |
+| ---------- | -------------------------- | ------------------------------------------------------------- |
+| `workflow` | `WorkflowEvent`-like       | The Workflow event; provides `instanceId` and `workflowName`. |
+| `step`     | `WorkflowStepContext`-like | The `step.do()` callback context.                             |
+| `key`      | `string`                   | Stable idempotency key for this side effect.                  |
+| `request`  | `Request`                  | The provider request payload.                                 |
+
+### Recovery
+
+```ts
+type ExternalCallRecovery<Request, Result> =
+  | "idempotent-call"
+  | "fail-closed"
+  | { reconcile: (ctx: ReconcileContext<Request>) => Promise<ReconcileResult<Result>> };
 ```
+
+| Policy              | Behavior                                                                                                                                                                                                                          |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"idempotent-call"` | Repeats `execute` with the same key and request. Only safe when the provider enforces idempotency for that key, such as Stripe `Idempotency-Key`.                                                                                 |
+| `"fail-closed"`     | Throws `SIDE_EFFECT_AMBIGUOUS` instead of repeating the provider call.                                                                                                                                                            |
+| `{ reconcile }`     | Looks up provider state (external ID, marker, webhook state). `{ status: "found", result }` stores and returns the result. `not_found` and `inconclusive` throw `SIDE_EFFECT_AMBIGUOUS`; absence is not treated as safe to retry. |
+
+### Errors
+
+All failures are `StepdaddyError` with a `code`:
+
+| Code                           | Meaning                                                       |
+| ------------------------------ | ------------------------------------------------------------- |
+| `INVALID_EXTERNAL_CALL`        | Bad spec or call input, including schema validation failures. |
+| `SIDE_EFFECT_CONFLICT`         | Same key reused with a different request digest.              |
+| `SIDE_EFFECT_AMBIGUOUS`        | Outcome unknown and the policy refuses to repeat the call.    |
+| `SIDE_EFFECT_STORAGE_FAILED`   | The result could not be persisted after `execute` succeeded.  |
+| `SIDE_EFFECT_RECONCILE_FAILED` | The `reconcile` function itself threw.                        |
+
+Convert `SIDE_EFFECT_AMBIGUOUS` to Cloudflare `NonRetryableError` when the Workflow should stop for operator reconciliation.
+
+### Adapters
+
+```ts
+import { cloudflare } from "stepdaddy/cloudflare";
+import { memory } from "stepdaddy/memory";
+import { local } from "stepdaddy/local";
+import { remote } from "stepdaddy/remote";
+
+createStepdaddy({ adapter: cloudflare(env.ARTIFACTS_BINDING) });
+createStepdaddy({ adapter: memory() });
+createStepdaddy({ adapter: local({ root: "/tmp/stepdaddy" }) });
+createStepdaddy({ adapter: remote({ url, token }) });
+```
+
+## Stored Records
+
+Per key, Stepdaddy stores compact JSON records under `.stepd/`: the request digest, one started/error record per attempt, and `committed.json` holding the result, the optional summary, and `status: "committed" | "reconciled"`. Storage is an implementation detail; your Workflow returns its normal domain output.
+
+## When Not to Use Stepdaddy
+
+- Read-only or non side-effectful repeatable work: just use `step.do()`.
+- Provider idempotency key alone is enough: call the provider directly.
+- Files and large blobs: use R2.
+- Compensation after a later step fails: use Workflows rollback.
+- Webhook-driven progression: use `waitForEvent`.
