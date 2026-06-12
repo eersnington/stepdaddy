@@ -1,0 +1,5 @@
+ARTIFACTS_SANDBOX_URL=https://artifactfs-sandbox.<your-subdomain>.workers.dev
+ARTIFACTS_SANDBOX_API_TOKEN=replace-me
+ARTIFACTS_SANDBOX_ID=artifactfs-sandbox
+STRIPE_BASE_URL=https://stepdaddy-stripe-mock.<your-subdomain>.workers.dev
+STRIPE_SECRET=sk_test_mock

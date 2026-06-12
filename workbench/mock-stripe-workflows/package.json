@@ -1,0 +1,24 @@
+{
+  "name": "@stepdaddy/workbench-mock-stripe-workflows",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:stripe-mock": "wrangler dev --config stripe-mock/wrangler.jsonc",
+    "dev:workflows": "wrangler dev --config workflows/wrangler.jsonc",
+    "deploy:stripe-mock": "wrangler deploy --config stripe-mock/wrangler.jsonc",
+    "deploy:workflows": "wrangler deploy --config workflows/wrangler.jsonc",
+    "smoke": "node scripts/run-smoke.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "stepdaddy": "file:../.."
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260606.1",
+    "@types/node": "^25.6.2",
+    "typescript": "^6.0.3",
+    "wrangler": "4.98.0"
+  },
+  "packageManager": "bun@1.3.14"
+}

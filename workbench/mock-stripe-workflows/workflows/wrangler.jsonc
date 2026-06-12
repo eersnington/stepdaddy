@@ -1,0 +1,19 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "stepdaddy-mock-stripe-workflows",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-11",
+  "observability": {
+    "enabled": true,
+  },
+  "vars": {
+    "ARTIFACTS_SANDBOX_ID": "artifactfs-sandbox",
+  },
+  "workflows": [
+    {
+      "name": "stepdaddy-charge-customer-workflow",
+      "binding": "CHARGE_CUSTOMER_WORKFLOW",
+      "class_name": "ChargeCustomerWorkflow",
+    },
+  ],
+}

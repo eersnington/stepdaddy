@@ -25,6 +25,9 @@ bunx wrangler secret put ARTIFACTFS_GIT_PASSWORD
 ```
 
 Set `ARTIFACTFS_GIT_USERNAME` if the backing remote needs a username. The branch defaults to `main`.
+Set `ARTIFACTFS_SANDBOX_ID` to choose the default sandbox instance; it defaults to `artifactfs-sandbox`.
+
+Request bodies may provide a `remote` only when configured Git credentials are not present. To allow request-selected remotes anyway, set `ARTIFACTFS_ALLOW_REQUEST_REMOTE=true` and provide credentials per request or use public remotes.
 
 ## API
 

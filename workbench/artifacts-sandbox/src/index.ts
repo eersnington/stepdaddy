@@ -7,6 +7,8 @@ type Env = {
   readonly ARTIFACTS_SANDBOX_API_TOKEN?: string;
   readonly ARTIFACTFS_BACKING_GIT_REMOTE?: string;
   readonly ARTIFACTFS_BACKING_GIT_BRANCH?: string;
+  readonly ARTIFACTFS_SANDBOX_ID?: string;
+  readonly ARTIFACTFS_ALLOW_REQUEST_REMOTE?: string;
   readonly ARTIFACTFS_GIT_USERNAME?: string;
   readonly ARTIFACTFS_GIT_PASSWORD?: string;
 };
@@ -65,7 +67,7 @@ async function mount(request: Request, env: Env): Promise<Response> {
 
 async function status(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const sandboxId = cleanSandboxId(url.searchParams.get("sandboxId") ?? DEFAULT_SANDBOX_ID);
+  const sandboxId = cleanSandboxId(url.searchParams.get("sandboxId") ?? defaultSandboxId(env));
   const sandbox = sandboxFor(env, sandboxId);
   const metadata = await sandbox.readFile("/workspace/.artifact-fs-mount").catch(() => null);
   if (metadata === null) return Response.json({ error: "no mounted repo" }, { status: 404 });
@@ -91,7 +93,7 @@ async function status(request: Request, env: Env): Promise<Response> {
 
 async function file(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const sandboxId = cleanSandboxId(url.searchParams.get("sandboxId") ?? DEFAULT_SANDBOX_ID);
+  const sandboxId = cleanSandboxId(url.searchParams.get("sandboxId") ?? defaultSandboxId(env));
   const path = cleanRepoPath(url.searchParams.get("path") ?? "");
   const sandbox = sandboxFor(env, sandboxId);
   const mountPath = await mountedPath(sandbox);
@@ -121,7 +123,7 @@ async function commit(request: Request, env: Env): Promise<Response> {
   });
 
   const sandboxId = cleanSandboxId(
-    typeof body.sandboxId === "string" ? body.sandboxId : DEFAULT_SANDBOX_ID,
+    typeof body.sandboxId === "string" ? body.sandboxId : defaultSandboxId(env),
   );
   const sandbox = sandboxFor(env, sandboxId);
   const mountPath = await mountedPath(sandbox);
@@ -135,16 +137,30 @@ async function commit(request: Request, env: Env): Promise<Response> {
 }
 
 function mountConfig(env: Env, body: Record<string, unknown>) {
-  const remote =
-    typeof body.remote === "string" && body.remote !== ""
-      ? body.remote
-      : requireEnv(env.ARTIFACTFS_BACKING_GIT_REMOTE, "ARTIFACTFS_BACKING_GIT_REMOTE");
+  const configuredRemote = requireEnv(
+    env.ARTIFACTFS_BACKING_GIT_REMOTE,
+    "ARTIFACTFS_BACKING_GIT_REMOTE",
+  );
+  const requestedRemote =
+    typeof body.remote === "string" && body.remote !== "" ? body.remote : undefined;
+  if (
+    requestedRemote !== undefined &&
+    env.ARTIFACTFS_GIT_PASSWORD !== undefined &&
+    env.ARTIFACTFS_GIT_PASSWORD !== "" &&
+    env.ARTIFACTFS_ALLOW_REQUEST_REMOTE !== "true"
+  ) {
+    throw new UserError(
+      "request remote is disabled while configured Git credentials are present; use the configured backing remote or set ARTIFACTFS_ALLOW_REQUEST_REMOTE=true",
+      400,
+    );
+  }
+  const remote = requestedRemote ?? configuredRemote;
   const branch =
     typeof body.branch === "string" && body.branch !== ""
       ? body.branch
       : (env.ARTIFACTFS_BACKING_GIT_BRANCH ?? DEFAULT_BRANCH);
   const sandboxId = cleanSandboxId(
-    typeof body.sandboxId === "string" ? body.sandboxId : DEFAULT_SANDBOX_ID,
+    typeof body.sandboxId === "string" ? body.sandboxId : defaultSandboxId(env),
   );
   const username =
     typeof body.gitUsername === "string" ? body.gitUsername : env.ARTIFACTFS_GIT_USERNAME;
@@ -185,6 +201,10 @@ function requireEnv(value: string | undefined, name: string): string {
   return value;
 }
 
+function defaultSandboxId(env: Env): string {
+  return env.ARTIFACTFS_SANDBOX_ID ?? DEFAULT_SANDBOX_ID;
+}
+
 function cleanSandboxId(value: string): string {
   const sandboxId = value.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9.-]{0,62}$/.test(sandboxId))
@@ -193,9 +213,21 @@ function cleanSandboxId(value: string): string {
 }
 
 function cleanRepoPath(value: string): string {
-  const path = value.trim().replace(/^\/+/, "").replace(/\/+$/, "");
+  const trimmed = value.trim();
+  if (trimmed.startsWith("/")) throw new UserError("path must be repo-relative", 400);
+  const path = trimmed.replace(/\/+$/, "");
   if (path === "") throw new UserError("path is required", 400);
-  if (path.split("/").some((part) => part === "" || part === "." || part === ".."))
+  const parts = path.split("/");
+  if (
+    parts.some(
+      (part) =>
+        part === "" ||
+        part === "." ||
+        part === ".." ||
+        part === ".git" ||
+        part === ".artifact-fs-mount",
+    )
+  )
     throw new UserError("path must be repo-relative", 400);
   return path;
 }

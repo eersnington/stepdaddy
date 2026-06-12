@@ -2,6 +2,7 @@
 set -euo pipefail
 
 MANIFEST=${1:?manifest path is required}
+trap 'rm -f "$MANIFEST"' EXIT
 
 eval "$(python3 - <<'PY' "$MANIFEST"
 import json, shlex, sys
@@ -27,7 +28,12 @@ for entry in manifest["files"]:
     target.write_text(entry["content"])
 PY
 
-git -C "$mountPath" add -A
+python3 - <<'PY' "$MANIFEST" | git -C "$mountPath" add --pathspec-from-file=- --pathspec-file-nul
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+for entry in manifest["files"]:
+    sys.stdout.write(entry["path"] + "\0")
+PY
 if git -C "$mountPath" diff --cached --quiet; then
   commit=$(git -C "$mountPath" rev-parse HEAD)
 else
