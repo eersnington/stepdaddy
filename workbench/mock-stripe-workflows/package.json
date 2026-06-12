@@ -8,6 +8,7 @@
     "dev:workflows": "wrangler dev --config workflows/wrangler.jsonc",
     "deploy:stripe-mock": "wrangler deploy --config stripe-mock/wrangler.jsonc",
     "deploy:workflows": "wrangler deploy --config workflows/wrangler.jsonc",
+    "export-repo": "node scripts/export-sandbox-repo.mjs",
     "smoke": "node scripts/run-smoke.mjs",
     "typecheck": "tsc --noEmit"
   },

@@ -13,6 +13,15 @@ type Env = {
   readonly ARTIFACTFS_GIT_PASSWORD?: string;
 };
 
+type SandboxHandle = ReturnType<typeof getSandbox>;
+
+type MountInfo = {
+  readonly repoName: string;
+  readonly mountPath: string;
+  readonly remote?: string;
+  readonly branch?: string;
+};
+
 const DEFAULT_BRANCH = "main";
 const DEFAULT_SANDBOX_ID = "artifactfs-sandbox";
 const MOUNT_SCRIPT = "/usr/local/bin/mount-artifact-fs-repo";
@@ -24,21 +33,39 @@ export default {
       const url = new URL(request.url);
 
       if (request.method === "GET" && url.pathname === "/") {
-        return new Response(helpText(), {
-          headers: { "content-type": "text/plain; charset=utf-8" },
-        });
+        return new Response(
+          [
+            "ArtifactFS Sandbox workbench",
+            "",
+            "POST /mount",
+            "GET  /status?sandboxId=<id>",
+            "GET  /file?sandboxId=<id>&path=<repo-path>",
+            "POST /commit",
+            "GET  /bundle?sandboxId=<id>",
+            "",
+          ].join("\n"),
+          { headers: { "content-type": "text/plain; charset=utf-8" } },
+        );
       }
 
       authorize(request, env);
 
-      if (request.method === "POST" && url.pathname === "/mount") return mount(request, env);
-      if (request.method === "GET" && url.pathname === "/status") return status(request, env);
-      if (request.method === "GET" && url.pathname === "/file") return file(request, env);
-      if (request.method === "POST" && url.pathname === "/commit") return commit(request, env);
+      if (request.method === "POST" && url.pathname === "/mount") return await mount(request, env);
+      if (request.method === "GET" && url.pathname === "/status") return await status(request, env);
+      if (request.method === "GET" && url.pathname === "/file") return await file(request, env);
+      if (request.method === "POST" && url.pathname === "/commit")
+        return await commit(request, env);
+      if (request.method === "GET" && url.pathname === "/bundle") return await bundle(request, env);
 
       return Response.json({ error: "not found" }, { status: 404 });
     } catch (error) {
-      return errorResponse(error);
+      if (error instanceof UserError) {
+        return Response.json({ error: error.message }, { status: error.status });
+      }
+      return Response.json(
+        { error: error instanceof Error ? error.message : String(error) },
+        { status: 500 },
+      );
     }
   },
 } satisfies ExportedHandler<Env>;
@@ -46,22 +73,32 @@ export default {
 async function mount(request: Request, env: Env): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const config = mountConfig(env, body);
-  const sandbox = getSandbox(env.ARTIFACTS_SANDBOX, config.sandboxId, {
+  const result = await getSandbox(env.ARTIFACTS_SANDBOX, config.sandboxId, {
     normalizeId: true,
     sleepAfter: "15m",
-  });
-  const result = await sandbox.exec(MOUNT_SCRIPT, {
+  }).exec(MOUNT_SCRIPT, {
     cwd: "/workspace",
     timeout: 120_000,
     env: config.env,
   });
-  if (!result.success) return commandError("ArtifactFS mount failed", result);
+  if (!result.success) {
+    return Response.json(
+      {
+        error: "ArtifactFS mount failed",
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      },
+      { status: 500 },
+    );
+  }
 
   const output = parseKeyValue(result.stdout);
   const repoName = output.get("repo_name");
   const mountPath = output.get("mount_path");
-  if (repoName === undefined || repoName === "") throw new UserError("missing repo_name", 500);
-  if (mountPath === undefined || mountPath === "") throw new UserError("missing mount_path", 500);
+  if (!repoName) throw new UserError("mount script did not report repo_name", 500);
+  if (!mountPath) throw new UserError("mount script did not report mount_path", 500);
+
   return Response.json({
     sandboxId: config.sandboxId,
     remote: config.remote ?? null,
@@ -73,40 +110,25 @@ async function mount(request: Request, env: Env): Promise<Response> {
 }
 
 async function status(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const sandboxId = (
-    url.searchParams.get("sandboxId") ??
-    env.ARTIFACTFS_SANDBOX_ID ??
-    DEFAULT_SANDBOX_ID
-  )
-    .trim()
-    .toLowerCase();
-  if (!/^[a-z0-9][a-z0-9.-]{0,62}$/.test(sandboxId))
-    throw new UserError("sandboxId is invalid", 400);
-  const sandbox = getSandbox(env.ARTIFACTS_SANDBOX, sandboxId, {
+  const sandboxId = sandboxIdFrom(new URL(request.url).searchParams.get("sandboxId"), env);
+  const instance = getSandbox(env.ARTIFACTS_SANDBOX, sandboxId, {
     normalizeId: true,
     sleepAfter: "15m",
   });
-  const metadata = await sandbox.readFile("/workspace/.artifact-fs-mount").catch(() => null);
-  if (metadata === null) return Response.json({ error: "no mounted repo" }, { status: 404 });
+  const mount = await readMount(instance);
 
-  const mount = parseKeyValue(metadata.content);
-  const mountPath = mount.get("MOUNTED_MOUNT_PATH");
-  const repoName = mount.get("MOUNTED_REPO_NAME");
-  if (mountPath === undefined || mountPath === "")
-    throw new UserError("missing MOUNTED_MOUNT_PATH", 500);
-  if (repoName === undefined || repoName === "")
-    throw new UserError("missing MOUNTED_REPO_NAME", 500);
-  const artifactFs = await sandbox.exec(`artifact-fs status --name ${shellQuote(repoName)}`);
-  const gitHead = await sandbox.exec(`git -C ${shellQuote(mountPath)} rev-parse HEAD`);
-  const gitStatus = await sandbox.exec(`git -C ${shellQuote(mountPath)} status --short --branch`);
+  const artifactFs = await instance.exec(`artifact-fs status --name ${shellQuote(mount.repoName)}`);
+  const gitHead = await instance.exec(`git -C ${shellQuote(mount.mountPath)} rev-parse HEAD`);
+  const gitStatus = await instance.exec(
+    `git -C ${shellQuote(mount.mountPath)} status --short --branch`,
+  );
 
   return Response.json({
     sandboxId,
-    remote: mount.get("MOUNTED_REMOTE"),
-    branch: mount.get("MOUNTED_BRANCH"),
-    repoName,
-    mountPath,
+    remote: mount.remote,
+    branch: mount.branch,
+    repoName: mount.repoName,
+    mountPath: mount.mountPath,
     artifactFsStatus: artifactFs.stdout.trim(),
     head: gitHead.stdout.trim() || null,
     gitStatus: gitStatus.stdout.trim() || null,
@@ -115,24 +137,19 @@ async function status(request: Request, env: Env): Promise<Response> {
 
 async function file(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const sandboxId = (
-    url.searchParams.get("sandboxId") ??
-    env.ARTIFACTFS_SANDBOX_ID ??
-    DEFAULT_SANDBOX_ID
-  )
-    .trim()
-    .toLowerCase();
-  if (!/^[a-z0-9][a-z0-9.-]{0,62}$/.test(sandboxId))
-    throw new UserError("sandboxId is invalid", 400);
-  const path = cleanRepoPath(url.searchParams.get("path") ?? "");
-  const sandbox = getSandbox(env.ARTIFACTS_SANDBOX, sandboxId, {
-    normalizeId: true,
-    sleepAfter: "15m",
-  });
-  const mountPath = await mountedPath(sandbox);
+  const instance = getSandbox(
+    env.ARTIFACTS_SANDBOX,
+    sandboxIdFrom(url.searchParams.get("sandboxId"), env),
+    {
+      normalizeId: true,
+      sleepAfter: "15m",
+    },
+  );
+  const mount = await readMount(instance);
+  const path = repoPathFrom(url.searchParams.get("path") ?? "");
 
   try {
-    const result = await sandbox.readFile(`${mountPath}/${path}`);
+    const result = await instance.readFile(`${mount.mountPath}/${path}`);
     return new Response(result.content, {
       headers: { "content-type": "text/plain; charset=utf-8" },
     });
@@ -144,47 +161,96 @@ async function file(request: Request, env: Env): Promise<Response> {
 async function commit(request: Request, env: Env): Promise<Response> {
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
   if (body === null) throw new UserError("request body must be JSON", 400);
-  if (typeof body.message !== "string" || body.message === "")
+  if (typeof body.message !== "string" || body.message === "") {
     throw new UserError("message is required", 400);
+  }
   if (!Array.isArray(body.files)) throw new UserError("files must be an array", 400);
 
   const files = body.files.map((entry) => {
     const file = entry as { path?: unknown; content?: unknown };
     if (typeof file.path !== "string") throw new UserError("file path must be a string", 400);
-    if (typeof file.content !== "string") throw new UserError("file content must be a string", 400);
-    return { path: cleanRepoPath(file.path), content: file.content };
+    if (typeof file.content !== "string") {
+      throw new UserError("file content must be a string", 400);
+    }
+    return { path: repoPathFrom(file.path), content: file.content };
   });
 
-  const sandboxId = (
-    typeof body.sandboxId === "string"
-      ? body.sandboxId
-      : (env.ARTIFACTFS_SANDBOX_ID ?? DEFAULT_SANDBOX_ID)
-  )
-    .trim()
-    .toLowerCase();
-  if (!/^[a-z0-9][a-z0-9.-]{0,62}$/.test(sandboxId))
-    throw new UserError("sandboxId is invalid", 400);
-  const sandbox = getSandbox(env.ARTIFACTS_SANDBOX, sandboxId, {
-    normalizeId: true,
-    sleepAfter: "15m",
-  });
-  const mountPath = await mountedPath(sandbox);
+  const instance = getSandbox(
+    env.ARTIFACTS_SANDBOX,
+    sandboxIdFrom(typeof body.sandboxId === "string" ? body.sandboxId : null, env),
+    {
+      normalizeId: true,
+      sleepAfter: "15m",
+    },
+  );
+  const mount = await readMount(instance);
   const manifest = `/tmp/artifacts-commit-${crypto.randomUUID()}.json`;
-  await sandbox.writeFile(manifest, JSON.stringify({ mountPath, message: body.message, files }));
-  const result = await sandbox.exec(`${COMMIT_SCRIPT} ${shellQuote(manifest)}`, {
+  await instance.writeFile(
+    manifest,
+    JSON.stringify({ mountPath: mount.mountPath, message: body.message, files }),
+  );
+
+  const result = await instance.exec(`${COMMIT_SCRIPT} ${shellQuote(manifest)}`, {
     timeout: 120_000,
   });
-  if (!result.success) return commandError("commit failed", result);
+  if (!result.success) {
+    return Response.json(
+      {
+        error: "commit failed",
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      },
+      { status: 500 },
+    );
+  }
   return Response.json(JSON.parse(result.stdout));
 }
 
+async function bundle(request: Request, env: Env): Promise<Response> {
+  const instance = getSandbox(
+    env.ARTIFACTS_SANDBOX,
+    sandboxIdFrom(new URL(request.url).searchParams.get("sandboxId"), env),
+    {
+      normalizeId: true,
+      sleepAfter: "15m",
+    },
+  );
+  const mount = await readMount(instance);
+  const bundlePath = `/tmp/artifactfs-${crypto.randomUUID()}.bundle`;
+  const result = await instance.exec(
+    `git -C ${shellQuote(mount.mountPath)} bundle create ${shellQuote(bundlePath)} --all && base64 -w 0 ${shellQuote(bundlePath)}`,
+    { timeout: 120_000 },
+  );
+  if (!result.success) {
+    return Response.json(
+      {
+        error: "bundle failed",
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      },
+      { status: 500 },
+    );
+  }
+
+  return new Response(result.stdout, {
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "content-disposition": `attachment; filename="${mount.repoName}.bundle.base64"`,
+    },
+  });
+}
+
 function mountConfig(env: Env, body: Record<string, unknown>) {
-  const requestedRemote =
-    typeof body.remote === "string" && body.remote !== "" ? body.remote : undefined;
+  const remote =
+    typeof body.remote === "string" && body.remote !== ""
+      ? body.remote
+      : env.ARTIFACTFS_BACKING_GIT_REMOTE;
   if (
-    requestedRemote !== undefined &&
-    env.ARTIFACTFS_GIT_PASSWORD !== undefined &&
-    env.ARTIFACTFS_GIT_PASSWORD !== "" &&
+    typeof body.remote === "string" &&
+    body.remote !== "" &&
+    env.ARTIFACTFS_GIT_PASSWORD &&
     env.ARTIFACTFS_ALLOW_REQUEST_REMOTE !== "true"
   ) {
     throw new UserError(
@@ -192,29 +258,23 @@ function mountConfig(env: Env, body: Record<string, unknown>) {
       400,
     );
   }
-  const remote = requestedRemote ?? env.ARTIFACTFS_BACKING_GIT_REMOTE;
+
   const branch =
     typeof body.branch === "string" && body.branch !== ""
       ? body.branch
       : (env.ARTIFACTFS_BACKING_GIT_BRANCH ?? DEFAULT_BRANCH);
-  const sandboxId = (
-    typeof body.sandboxId === "string"
-      ? body.sandboxId
-      : (env.ARTIFACTFS_SANDBOX_ID ?? DEFAULT_SANDBOX_ID)
-  )
-    .trim()
-    .toLowerCase();
-  if (!/^[a-z0-9][a-z0-9.-]{0,62}$/.test(sandboxId))
-    throw new UserError("sandboxId is invalid", 400);
+  const sandboxId = sandboxIdFrom(typeof body.sandboxId === "string" ? body.sandboxId : null, env);
   const repoName = (typeof body.repoName === "string" ? body.repoName : sandboxId)
     .trim()
     .toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._-]{0,99}$/.test(repoName))
+  if (!/^[a-z0-9][a-z0-9._-]{0,99}$/.test(repoName)) {
     throw new UserError("repoName is invalid", 400);
-  const username =
-    typeof body.gitUsername === "string" ? body.gitUsername : env.ARTIFACTFS_GIT_USERNAME;
-  const password =
-    typeof body.gitPassword === "string" ? body.gitPassword : env.ARTIFACTFS_GIT_PASSWORD;
+  }
+
+  const gitUsername =
+    remote && typeof body.gitUsername === "string" ? body.gitUsername : env.ARTIFACTFS_GIT_USERNAME;
+  const gitPassword =
+    remote && typeof body.gitPassword === "string" ? body.gitPassword : env.ARTIFACTFS_GIT_PASSWORD;
 
   return {
     remote,
@@ -223,48 +283,58 @@ function mountConfig(env: Env, body: Record<string, unknown>) {
     env: {
       MOUNT_GIT_BRANCH: branch,
       MOUNT_REPO_NAME: repoName,
-      ...(remote === undefined ? {} : { MOUNT_GIT_REMOTE: remote }),
-      ...(remote !== undefined && username !== undefined ? { MOUNT_GIT_USERNAME: username } : {}),
-      ...(remote !== undefined && password !== undefined ? { MOUNT_GIT_PASSWORD: password } : {}),
+      ...(remote ? { MOUNT_GIT_REMOTE: remote } : {}),
+      ...(gitUsername ? { MOUNT_GIT_USERNAME: gitUsername } : {}),
+      ...(gitPassword ? { MOUNT_GIT_PASSWORD: gitPassword } : {}),
     },
   };
 }
 
-async function mountedPath(sandbox: ReturnType<typeof getSandbox>): Promise<string> {
+function sandboxIdFrom(value: string | null | undefined, env: Env): string {
+  const sandboxId = (value ?? env.ARTIFACTFS_SANDBOX_ID ?? DEFAULT_SANDBOX_ID).trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9.-]{0,62}$/.test(sandboxId)) {
+    throw new UserError("sandboxId is invalid", 400);
+  }
+  return sandboxId;
+}
+
+async function readMount(sandbox: SandboxHandle): Promise<MountInfo> {
   const metadata = await sandbox.readFile("/workspace/.artifact-fs-mount").catch(() => null);
   if (metadata === null) throw new UserError("no mounted repo", 404);
-  const mountPath = parseKeyValue(metadata.content).get("MOUNTED_MOUNT_PATH");
-  if (mountPath === undefined || mountPath === "")
-    throw new UserError("missing MOUNTED_MOUNT_PATH", 500);
-  return mountPath;
+
+  const values = parseKeyValue(metadata.content);
+  const repoName = values.get("MOUNTED_REPO_NAME");
+  const mountPath = values.get("MOUNTED_MOUNT_PATH");
+  const remote = values.get("MOUNTED_REMOTE");
+  const branch = values.get("MOUNTED_BRANCH");
+  if (!repoName) throw new UserError("mount metadata is missing MOUNTED_REPO_NAME", 500);
+  if (!mountPath) throw new UserError("mount metadata is missing MOUNTED_MOUNT_PATH", 500);
+
+  return {
+    repoName,
+    mountPath,
+    ...(remote ? { remote } : {}),
+    ...(branch ? { branch } : {}),
+  };
+}
+
+function repoPathFrom(value: string): string {
+  const path = value.trim().replace(/\/+$/, "");
+  if (path === "" || path.startsWith("/")) throw new UserError("path must be repo-relative", 400);
+  if (
+    path.split("/").some((part) => ["", ".", "..", ".git", ".artifact-fs-mount"].includes(part))
+  ) {
+    throw new UserError("path must be repo-relative", 400);
+  }
+  return path;
 }
 
 function authorize(request: Request, env: Env): void {
-  const expected = env.ARTIFACTS_SANDBOX_API_TOKEN;
-  if (expected === undefined || expected === "")
-    throw new UserError("ARTIFACTS_SANDBOX_API_TOKEN is not configured", 500);
-  if (request.headers.get("authorization") !== `Bearer ${expected}`)
+  const token = env.ARTIFACTS_SANDBOX_API_TOKEN;
+  if (!token) throw new UserError("ARTIFACTS_SANDBOX_API_TOKEN is not configured", 500);
+  if (request.headers.get("authorization") !== `Bearer ${token}`) {
     throw new UserError("Unauthorized", 401);
-}
-
-function cleanRepoPath(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.startsWith("/")) throw new UserError("path must be repo-relative", 400);
-  const path = trimmed.replace(/\/+$/, "");
-  if (path === "") throw new UserError("path is required", 400);
-  const parts = path.split("/");
-  if (
-    parts.some(
-      (part) =>
-        part === "" ||
-        part === "." ||
-        part === ".." ||
-        part === ".git" ||
-        part === ".artifact-fs-mount",
-    )
-  )
-    throw new UserError("path must be repo-relative", 400);
-  return path;
+  }
 }
 
 function parseKeyValue(text: string): Map<string, string> {
@@ -278,38 +348,6 @@ function parseKeyValue(text: string): Map<string, string> {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
-
-function commandError(
-  message: string,
-  result: { stdout: string; stderr: string; exitCode?: number },
-): Response {
-  return Response.json(
-    { error: message, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
-    { status: 500 },
-  );
-}
-
-function errorResponse(error: unknown): Response {
-  if (error instanceof UserError)
-    return Response.json({ error: error.message }, { status: error.status });
-  if (error instanceof Response) return error;
-  return Response.json(
-    { error: error instanceof Error ? error.message : String(error) },
-    { status: 500 },
-  );
-}
-
-function helpText(): string {
-  return [
-    "ArtifactFS Sandbox workbench",
-    "",
-    "POST /mount",
-    "GET  /status?sandboxId=<id>",
-    "GET  /file?sandboxId=<id>&path=<repo-path>",
-    "POST /commit",
-    "",
-  ].join("\n");
 }
 
 class UserError extends Error {
