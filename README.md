@@ -4,7 +4,7 @@
 
 > ⚠️ Warning: I do not recommend to use this package within production as this is more of an experiment that I took to pair soon to be released Cloudflare Artifacts, and Cloudflare Workflows. It works as per the confines of my limited tests, but there are (and should be) better ways to do idempotent retires within CF Workflows.
 
-Git-backed idempotency records for external side effects inside Cloudflare Workflows.
+Git-backed idempotency records for external side effectful activities inside Cloudflare Workflows.
 
 Workflows already retries failed `step.do()` callbacks and caches successful step output. Stepdaddy adds what is missing for one external provider call inside a retryable step:
 

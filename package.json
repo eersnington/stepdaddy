@@ -1,7 +1,7 @@
 {
   "name": "stepdaddy",
   "version": "0.1.0",
-  "description": "Git-backed idempotency records for external calls inside Cloudflare Workflows.",
+  "description": "Git-backed idempotency records for side effectful activities inside Cloudflare Workflows.",
   "homepage": "https://github.com/eersnington/stepdaddy#readme",
   "bugs": {
     "url": "https://github.com/eersnington/stepdaddy/issues"
