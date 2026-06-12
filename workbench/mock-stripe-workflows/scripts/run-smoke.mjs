@@ -7,6 +7,7 @@ const started = await fetch(`${workflowUrl}/charge`, {
     customerId: "cus_mock_workbench",
     amount: 1200,
     currency: "usd",
+    simulateTransientPaymentFailure: true,
   }),
 });
 

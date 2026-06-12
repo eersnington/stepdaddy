@@ -5,12 +5,14 @@ type ChargePayload = {
   readonly customerId: string;
   readonly amount: number;
   readonly currency: string;
+  readonly simulateTransientPaymentFailure?: boolean;
 };
 
 type StripeIntentInput = {
   readonly customerId: string;
   readonly amount: number;
   readonly currency: string;
+  readonly simulateTransientPaymentFailure?: boolean;
 };
 
 type StripeInvoiceInput = {
@@ -22,6 +24,10 @@ type StripePaymentIntent = {
   readonly id: string;
   readonly object: "payment_intent";
   readonly status?: string;
+  readonly mockIdempotency?: {
+    readonly replayed: boolean;
+    readonly requestCount: number;
+  };
 };
 
 type StripeInvoice = {
@@ -58,7 +64,7 @@ export class ChargeCustomerWorkflow extends WorkflowEntrypoint<Env, ChargePayloa
     const createPaymentIntent = defineExternalCall<StripeIntentInput, StripePaymentIntent>({
       name: "stripe.payment_intent.create",
       recovery: "idempotent-call",
-      execute: async ({ request, key }) => {
+      execute: async ({ request, key, attempt }) => {
         const response = await fetch(`${stripeBaseUrl}/v1/payment_intents`, {
           method: "POST",
           headers: {
@@ -75,13 +81,21 @@ export class ChargeCustomerWorkflow extends WorkflowEntrypoint<Env, ChargePayloa
         const body = (await response.json()) as StripePaymentIntent;
         if (!response.ok)
           throw new Error(`Stripe payment_intent.create failed with HTTP ${response.status}`);
+        if (request.simulateTransientPaymentFailure === true && attempt === 1) {
+          throw new Error("simulated network failure after Stripe accepted payment_intent.create");
+        }
         return body;
       },
       summary: ({ request, result }) => ({
         externalId: result.id,
-        status: result.status,
+        status:
+          result.mockIdempotency?.replayed === true
+            ? `${result.status ?? "unknown"} idempotency-replay`
+            : result.status,
         amount: request.amount,
         currency: request.currency,
+        idempotencyReplay: result.mockIdempotency?.replayed ?? false,
+        idempotencyRequestCount: result.mockIdempotency?.requestCount ?? 1,
       }),
     });
 
@@ -113,19 +127,28 @@ export class ChargeCustomerWorkflow extends WorkflowEntrypoint<Env, ChargePayloa
       }),
     });
 
-    const charge = await step.do("charge customer", async (ctx) => {
-      const intent = await stepdaddy.call(createPaymentIntent, {
-        workflow: event,
-        step: ctx,
-        key: `wf:${event.instanceId}:charge-customer`,
-        request: {
-          customerId: event.payload.customerId,
-          amount: event.payload.amount,
-          currency: event.payload.currency,
-        },
-      });
-      return { paymentIntentId: intent.id };
-    });
+    const charge = await step.do(
+      "charge customer",
+      { retries: { limit: 2, delay: "1 second", backoff: "constant" } },
+      async (ctx) => {
+        const intent = await stepdaddy.call(createPaymentIntent, {
+          workflow: event,
+          step: ctx,
+          key: `wf:${event.instanceId}:charge-customer`,
+          request: {
+            customerId: event.payload.customerId,
+            amount: event.payload.amount,
+            currency: event.payload.currency,
+            ...(event.payload.simulateTransientPaymentFailure === undefined
+              ? {}
+              : {
+                  simulateTransientPaymentFailure: event.payload.simulateTransientPaymentFailure,
+                }),
+          },
+        });
+        return { paymentIntentId: intent.id };
+      },
+    );
 
     const invoice = await step.do("create invoice", async (ctx) => {
       const created = await stepdaddy.call(createInvoice, {
@@ -312,9 +335,20 @@ async function parseChargePayload(request: Request): Promise<ChargePayload> {
       status: 400,
     });
   }
+  if (
+    payload.simulateTransientPaymentFailure !== undefined &&
+    typeof payload.simulateTransientPaymentFailure !== "boolean"
+  ) {
+    throw new Response("simulateTransientPaymentFailure must be a boolean when provided\n", {
+      status: 400,
+    });
+  }
   return {
     customerId: payload.customerId,
     amount: payload.amount,
     currency: payload.currency,
+    ...(payload.simulateTransientPaymentFailure === undefined
+      ? {}
+      : { simulateTransientPaymentFailure: payload.simulateTransientPaymentFailure }),
   };
 }

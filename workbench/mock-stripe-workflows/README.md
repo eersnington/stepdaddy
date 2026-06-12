@@ -37,6 +37,17 @@ STRIPE_SECRET
 WORKFLOW_URL=https://<workflow-worker> bun run smoke
 ```
 
+The smoke run intentionally simulates one transient failure after the Stripe mock accepts `payment_intent.create`. Cloudflare Workflows retries the `charge customer` step with the same Stepdaddy key, and the Stripe mock returns the stored idempotent response instead of creating a new payment intent.
+
+After exporting the run repo, the Git log should show the first payment intent attempt crossing the provider boundary and failing, followed by a replayed idempotent attempt:
+
+```text
+stepdaddy: stripe.payment_intent.create attempt 2 committed
+Status: succeeded idempotency-replay
+stepdaddy: stripe.payment_intent.create attempt 1 error
+stepdaddy: stripe.payment_intent.create attempt 1 started
+```
+
 ## Inspect A Run Repo
 
 Export and clone the sandbox-local Git repo after a workflow run:

@@ -6,4 +6,18 @@
   "observability": {
     "enabled": true,
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "STRIPE_IDEMPOTENCY",
+        "class_name": "StripeIdempotency",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["StripeIdempotency"],
+    },
+  ],
 }
