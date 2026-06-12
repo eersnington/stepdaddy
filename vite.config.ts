@@ -5,6 +5,7 @@ export default defineConfig({
     "*": "vp check --fix",
   },
   pack: {
+    entry: ["src/index.ts", "src/cloudflare.ts", "src/memory.ts", "src/local.ts", "src/remote.ts"],
     dts: {
       tsgo: true,
     },

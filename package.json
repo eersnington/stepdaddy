@@ -18,6 +18,10 @@
   "type": "module",
   "exports": {
     ".": "./dist/index.mjs",
+    "./cloudflare": "./dist/cloudflare.mjs",
+    "./local": "./dist/local.mjs",
+    "./memory": "./dist/memory.mjs",
+    "./remote": "./dist/remote.mjs",
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -30,6 +34,9 @@
     "check": "vp check",
     "prepublishOnly": "vp run build",
     "prepare": "vp config"
+  },
+  "dependencies": {
+    "isomorphic-git": "1.27.1"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",
