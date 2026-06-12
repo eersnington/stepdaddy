@@ -37,9 +37,9 @@ PY
 if git -C "$mountPath" diff --cached --quiet; then
   commit=$(git -C "$mountPath" rev-parse HEAD)
 else
-  git -C "$mountPath" -c user.name=artifactfs-sandbox -c user.email=artifactfs-sandbox@example.invalid commit -m "$message"
+  git -C "$mountPath" -c user.name=artifactfs-sandbox -c user.email=artifactfs-sandbox@example.invalid commit -m "$message" >/dev/null 2>&1
   commit=$(git -C "$mountPath" rev-parse HEAD)
-  git -C "$mountPath" push
+  git -C "$mountPath" push >/dev/null 2>&1
 fi
 
 python3 - <<'PY' "$commit" "$parent"

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${MOUNT_GIT_REMOTE:?MOUNT_GIT_REMOTE is required}"
 : "${MOUNT_GIT_BRANCH:=main}"
+: "${MOUNT_REPO_NAME:=artifactfs-sandbox}"
 : "${ARTIFACT_FS_ROOT:=/tmp/artifact-fs}"
 : "${MOUNT_ROOT:=/workspace/mnt}"
+: "${LOCAL_REPO_ROOT:=/workspace/repos}"
 : "${ARTIFACT_FS_MOUNT_METADATA_FILE:=/workspace/.artifact-fs-mount}"
 : "${ARTIFACT_FS_DAEMON_LOG:=/tmp/artifact-fs-daemon.log}"
 : "${ARTIFACT_FS_DAEMON_PID_FILE:=/tmp/artifact-fs-daemon.pid}"
@@ -37,19 +38,37 @@ validate_branch() {
   fi
 }
 
-infer_repo_name() {
-  local remote="$1"
-  remote="${remote%/}"
-  remote="${remote%.git}"
-  local name="${remote##*/}"
-  if [ -z "$name" ] || [ "$name" = "$remote" ]; then
-    name="${remote##*:}"
-  fi
-  if [ -z "$name" ] || [ "$name" = "$remote" ]; then
-    echo "artifact-fs: could not infer repo name from remote" >&2
+validate_repo_name() {
+  local name="$1"
+  if [[ -z "$name" || ! "$name" =~ ^[a-z0-9][a-z0-9._-]{0,99}$ ]]; then
+    echo "artifact-fs: MOUNT_REPO_NAME must be a valid repo name" >&2
     exit 1
   fi
-  printf '%s\n' "$name"
+}
+
+ensure_local_remote() {
+  local name="$1"
+  local remote_path="${LOCAL_REPO_ROOT}/${name}.git"
+  if [ -d "$remote_path" ]; then
+    printf '%s\n' "$remote_path"
+    return 0
+  fi
+
+  mkdir -p "$LOCAL_REPO_ROOT"
+  git init --bare "$remote_path" >/dev/null
+  git -C "$remote_path" symbolic-ref HEAD "refs/heads/${MOUNT_GIT_BRANCH}"
+
+  local workdir
+  workdir=$(mktemp -d)
+  git -C "$workdir" init -b "$MOUNT_GIT_BRANCH" >/dev/null
+  printf '# ArtifactFS sandbox\n' >"${workdir}/README.md"
+  git -C "$workdir" add README.md
+  git -C "$workdir" -c user.name=artifactfs-sandbox -c user.email=artifactfs-sandbox@example.invalid commit -m "Initial commit" >/dev/null
+  git -C "$workdir" remote add origin "$remote_path"
+  git -C "$workdir" push origin "$MOUNT_GIT_BRANCH" >/dev/null
+  rm -rf "$workdir"
+
+  printf '%s\n' "$remote_path"
 }
 
 ensure_daemon() {
@@ -84,9 +103,16 @@ if [ ! -e /dev/fuse ]; then
 fi
 
 validate_branch "$MOUNT_GIT_BRANCH"
+validate_repo_name "$MOUNT_REPO_NAME"
 configure_git_credentials
 
-REPO_NAME=$(infer_repo_name "$MOUNT_GIT_REMOTE")
+if [ -n "${MOUNT_GIT_REMOTE:-}" ]; then
+  REMOTE="$MOUNT_GIT_REMOTE"
+  REPO_NAME="$MOUNT_REPO_NAME"
+else
+  REPO_NAME="$MOUNT_REPO_NAME"
+  REMOTE=$(ensure_local_remote "$REPO_NAME")
+fi
 MOUNT_PATH="${MOUNT_ROOT}/${REPO_NAME}"
 
 mkdir -p "$ARTIFACT_FS_ROOT" "$MOUNT_ROOT"
@@ -94,13 +120,13 @@ mkdir -p "$ARTIFACT_FS_ROOT" "$MOUNT_ROOT"
 if ! artifact-fs status --name "$REPO_NAME" >/dev/null 2>&1; then
   artifact-fs add-repo \
     --name "$REPO_NAME" \
-    --remote "$MOUNT_GIT_REMOTE" \
+    --remote "$REMOTE" \
     --branch "$MOUNT_GIT_BRANCH" \
     --mount-root "$MOUNT_ROOT"
 fi
 
 cat >"$ARTIFACT_FS_MOUNT_METADATA_FILE" <<EOF
-MOUNTED_REMOTE=$MOUNT_GIT_REMOTE
+MOUNTED_REMOTE=$REMOTE
 MOUNTED_BRANCH=$MOUNT_GIT_BRANCH
 MOUNTED_REPO_NAME=$REPO_NAME
 MOUNTED_MOUNT_PATH=$MOUNT_PATH

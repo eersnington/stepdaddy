@@ -2,7 +2,7 @@
 
 Cloudflare Sandbox + FUSE workbench for ArtifactFS.
 
-This follows the upstream `cloudflare/artifact-fs/examples/cloudflare-sandbox-sdk` shape: mount one Git remote into a Cloudflare Sandbox, inspect status, read text files, and optionally commit text files back to the mounted repo.
+This mounts a sandbox-local Git repo through ArtifactFS by default. It can also mount an external Git remote when a caller or deployment config provides one.
 
 This is not the Cloudflare Artifacts REST API. It is a deployable ArtifactFS/Sandbox workbench.
 
@@ -20,14 +20,11 @@ ARTIFACT_FS_REF=main
 ```sh
 bun install
 bunx wrangler secret put ARTIFACTS_SANDBOX_API_TOKEN
-bunx wrangler secret put ARTIFACTFS_BACKING_GIT_REMOTE
-bunx wrangler secret put ARTIFACTFS_GIT_PASSWORD
 ```
 
-Set `ARTIFACTFS_GIT_USERNAME` if the backing remote needs a username. The branch defaults to `main`.
-Set `ARTIFACTFS_SANDBOX_ID` to choose the default sandbox instance; it defaults to `artifactfs-sandbox`.
+The branch defaults to `main`. Set `ARTIFACTFS_SANDBOX_ID` to choose the default sandbox instance; it defaults to `artifactfs-sandbox`.
 
-Request bodies may provide a `remote` only when configured Git credentials are not present. To allow request-selected remotes anyway, set `ARTIFACTFS_ALLOW_REQUEST_REMOTE=true` and provide credentials per request or use public remotes.
+Request bodies may provide a `remote` to mount an external Git repo. If configured Git credentials are present, request-selected remotes are rejected unless `ARTIFACTFS_ALLOW_REQUEST_REMOTE=true`.
 
 ## API
 
