@@ -3,3 +3,4 @@ dist
 *.log
 .DS_Store
 .wrangler
+workbench/mock-stripe-workflows/output/
